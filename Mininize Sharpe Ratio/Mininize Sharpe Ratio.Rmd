@@ -1,0 +1,274 @@
+---
+title: _Analysis_
+subtitle: _Analysis 2_
+author: hi
+date: 2 Nov 2019
+output: 
+  html_document:
+    code_folding: show
+    df_print: paged
+    toc: TRUE
+    toc_float:
+       smooth_scroll: TRUE
+       collapsed: TRUE
+---
+<style type="text/css">
+h1.title { font-size: 38px; text-align: center; }
+h3.subtitle{ font-size: 26px; text-align: center; }
+h4.author{ font-size: 20px; text-align: right; }
+h4.date{ font-size: 16px; text-align: right; }
+h1 { font-size: 32px; }
+h2 { font-size: 24px; }
+body{ font-size: 16px; text-align: justify}
+td { font-size: 14px; }
+pre { font-size: 14px;}
+img[alt = Personal_Picture] { width: 200px; }
+img[alt = Pet_Picture] { width: 200px; }
+#TOC { color: Purple; font-size: 12px; text-align: justify; border-color: Purple; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo = FALSE}
+setwd("/Users/.../")
+```
+
+```{r message = FALSE}
+# load the required packages
+library(readxl)
+library(data.table)
+library(knitr)
+library(matrixStats)
+library(CVXR)
+```
+
+# 0
+```{r}
+Table_0 <- read_xlsx("data.xlsx")
+Table_0 <- data.table(Table_0)
+```
+
+# 1 (Result shown in percentage %)
+```{r, results='asis'}
+n <- nrow(Table_0)
+# Calculate the simple return for Stocks
+stock_s_return <- ((Table_0[-1, "Stocks"] - Table_0[1:(n-1), "Stocks"])/Table_0[1:(n-1), "Stocks"])*100
+# Calculate the simple return for Bonds
+bonds_s_return <- ((Table_0[-1, "Bonds"] - Table_0[1:(n-1), "Bonds"])/Table_0[1:(n-1), "Bonds"])*100
+# Calculate the simple return for MM
+mm_s_return <- ((Table_0[-1, "MM"] - Table_0[1:(n-1), "MM"])/Table_0[1:(n-1), "MM"])*100
+# Combind all the data
+simple_return_table <- cbind(stock_s_return, bonds_s_return, mm_s_return)
+simple_return_table <- cbind((Table_0[-1,"Year"]),round(simple_return_table, 2))
+# show the result in a table
+kable(simple_return_table, caption = "Simple return in %")
+# update the simple_return_table with the original one without rounding for improving the accuracy later
+simple_return_table <- cbind((Table_0[-1,"Year"]),stock_s_return, bonds_s_return, mm_s_return)
+```
+
+# 2 (Result shown in Value)
+```{r, results='asis'}
+# Calculate the mean
+mu <- apply(simple_return_table[,2:ncol(simple_return_table)], 2, mean)
+mu <- t(data.table(mu/100))
+rownames(mu) <- "Sample mean μˆ"
+colnames(mu) <- colnames(simple_return_table[,2:ncol(simple_return_table)])
+# show the result in a table
+kable(mu, caption = " Sample Mean")
+```
+
+# 3 (Result shown in Value)
+```{r, results='asis'}
+# Calculate the cov matrix
+cov_matrix <- cov(simple_return_table[,2:ncol(simple_return_table)]/100)
+# show the result in a table
+kable(cov_matrix, caption = "Covariance Matrix")
+```
+
+# 4 (Result shown in Value)
+```{r, results='asis'}
+# calculate the geo mean for each asset
+stock_g_mean <- ((product(as.matrix((1 + simple_return_table[,"Stocks"]/100))))^(1/nrow(simple_return_table))  - 1)
+bond_g_mean <- ((product(as.matrix((1 + simple_return_table[,"Bonds"]/100))))^(1/nrow(simple_return_table))  - 1)
+mm_g_mean <- ((product(as.matrix((1 + simple_return_table[,"MM"]/100))))^(1/nrow(simple_return_table))  - 1)
+# cbind all the result
+geo_mean_table <- t(data.table(c(stock_g_mean,bond_g_mean,mm_g_mean)))
+rownames(geo_mean_table) <- "Sample geometric mean νˆ"
+colnames(geo_mean_table) <- colnames(simple_return_table[,2:ncol(simple_return_table)])
+# show the result in a table
+kable(geo_mean_table, caption = "Sample geometric mean νˆ")
+```
+
+# 5
+```{r}
+# define the function
+MVO_Min_Var <- function(mu, Sigma, beta) {
+  w <- Variable(nrow(Sigma))
+  # Define the problem
+  prob <- Problem(Minimize(quad_form(w, Sigma)), 
+                   constraints = list(sum(w) == 1, w >= 0, sum(w*mu) >= beta)) # Defind the constraints
+  result <- solve(prob)
+  w <- as.vector(result$getValue(w))
+  names(w) <- colnames(Sigma)
+  return(w)
+}
+```
+
+# 6 (Result shown in Value)
+```{r}
+# All the beta require
+beta_list <- seq(0.065, 0.105, by = 0.01)
+# defind a variable
+Table_4 <- data.table()
+Table_4 <- sapply(beta_list, function(b) {
+  # calculate the weight
+  weight <- MVO_Min_Var(as.numeric(geo_mean_table), cov_matrix, b)
+  # calculate the portfolio variance
+  p_var <- weight %*% cov_matrix %*% weight
+  # cbind the data
+  Table_4_row <- c(p_var, weight)})
+Table_4 <- t(Table_4)
+colnames(Table_4)[1] <- "Variance"
+Table_4 <- cbind(beta_list, Table_4)
+colnames(Table_4)[1] <- "Rate of return β"
+# show the result in a table
+kable(Table_4, caption = "Table 4")
+```
+
+
+# 7 (Result shown in Value) (Problem requires us to mininize sharpe ratio)
+
+$$ \min_\textbf{w} \dfrac{\textbf{w}^T \hat{\mu}}{\sqrt{\textbf{w}^T \hat{\Sigma} \textbf{w}}}  $$
+$$ \implies \max_\textbf{w} \dfrac{-\textbf{w}^T \hat{\mu}}{\sqrt{\textbf{w}^T \hat{\Sigma} \textbf{w}}}  $$
+It reformulates the original concave-convex FP problem
+
+$$ f(\textbf{w}) = {-\textbf{w}^T \hat{\mu}}, g(\textbf{w}) ={\sqrt{\textbf{w}^T \hat{\Sigma} \textbf{w}}} $$
+
+$$ f(\textbf{w}) \ is \ concave \text{, we can treat as, and }\ g(\textbf{w}) \ is \ convex  $$
+as the problem 
+
+$$ f(\textbf{w})−yg(\textbf{w}), \text{where y is a new auxiliary variable} $$
+
+Then, we are maximizing the function
+$$  \max_\textbf{w} {-\textbf{w}^T \hat{\mu}} -y{\sqrt{\textbf{w}^T \hat{\Sigma} \textbf{w}}}  $$
+with constraints stated in the question. 
+It is equivalent to 
+
+$$  \min_\textbf{w} {\textbf{w}^T \hat{\mu}} + y{\sqrt{\textbf{w}^T \hat{\Sigma} \textbf{w}}}  , \ convex \ function $$
+$$ \text{y is iteratively updated by} \ y^{(k)} = \dfrac{\textbf{w}^{(k)T} \hat{\mu}}{\sqrt{\textbf{w}^{(k)T} \hat{\Sigma} \textbf{w}^{(k)}}} \text{ here, until convergence}$$
+with the contraints stated in the question
+$$ 1^T\textbf{w} = 1, ||\textbf{w}||_1 \leq 1.5$$
+
+
+```{r}
+Sigma <- cov_matrix
+Mu <- as.vector(mu)
+N <- length(Mu)
+
+# square-root of matrix Sigma
+Sigma_12 <- chol(Sigma)
+
+# create function for MVP
+SOCP_Dinkelbach <- function(y) {
+  w <- Variable(nrow(Sigma))
+  prob <- Problem(Minimize(t(Mu) %*% w + y*cvxr_norm(Sigma_12 %*% w, 2)),
+                  constraints = list(sum(w) == 1, 
+                                     cvxr_norm(w,1) <= 1.5))
+  result <- solve(prob)
+  return(as.vector(result$getValue(w)))
+}
+
+# initial point (has to satisfy t(w_k) %*% Mu>=0)
+i_max <- which.max(Mu)
+w_k <- rep(0, N)  
+w_k[i_max] <- 1
+
+# now the iterative Dinkelbach algorithm
+k <- 1
+while(k == 1 || max(abs(w_k - w_prev)) > 1e-6) {
+  w_prev <- w_k
+  y_k <- as.numeric(t(w_k) %*% Mu / sqrt(t(w_k) %*% Sigma %*% w_k))
+  w_k <- SOCP_Dinkelbach(y_k)
+  k <- k + 1
+}
+w_Dinkelbach <- t(as.data.table(w_k))
+colnames(w_Dinkelbach) <- colnames(mu)
+row.names(w_Dinkelbach) <- "Weight"
+kable(w_Dinkelbach, caption = "Minimum Sharpe ratio optimization by using Dinkelbach method")
+```
+
+# 8 (Result shown in Value)
+## (a)
+```{r}
+# in sample data
+in_sample = Table_0[1:(1995-1960+1),]
+# out sample data
+out_sample = Table_0[(1995-1960+2):nrow(Table_0), ]
+
+in_n <- nrow(in_sample)
+# Calculate the in-sample simple return for Stocks
+in_stock_s_return <- ((in_sample[-1, "Stocks"] - in_sample[1:(in_n-1), "Stocks"])/in_sample[1:(in_n-1), "Stocks"])
+# Calculate the simple return for Bonds
+in_bonds_s_return <- ((in_sample[-1, "Bonds"] - in_sample[1:(in_n-1), "Bonds"])/in_sample[1:(in_n-1), "Bonds"])
+# Calculate the simple return for MM
+in_mm_s_return <- ((in_sample[-1, "MM"] - in_sample[1:(in_n-1), "MM"])/in_sample[1:(in_n-1), "MM"])
+# Combind all the data
+in_sample_return_table <- cbind((in_sample[-1, "Year"]), in_stock_s_return, in_bonds_s_return, in_mm_s_return)
+
+# calculate the in-sample sample geo mean for each asset
+in_stock_g_mean <- (product(as.matrix(1 + in_sample_return_table[,"Stocks"])))^(1/nrow(in_sample_return_table))  - 1
+in_bond_g_mean <- (product(as.matrix(1 + in_sample_return_table[,"Bonds"])))^(1/nrow(in_sample_return_table))  - 1
+in_mm_g_mean <- (product(as.matrix(1 + in_sample_return_table[,"MM"])))^(1/nrow(in_sample_return_table))  - 1
+# cbind all the result
+in_geo_mean_table <- t(data.table(c(in_stock_g_mean,in_bond_g_mean,in_mm_g_mean)))
+rownames(in_geo_mean_table) <- "In-sample geometric mean νˆ"
+colnames(in_geo_mean_table) <- colnames(in_sample_return_table[,2:ncol(in_sample_return_table)])
+kable(in_geo_mean_table, caption = "In-sample geometric mean νˆ")
+```
+
+## (b)
+```{r}
+in_cov_matrix <- cov(in_sample_return_table[,2:ncol(in_sample_return_table)])
+# show the result in a table
+kable(in_cov_matrix, caption = "In-sample covariance Matrix")
+```
+
+## (c)
+```{r}
+beta_list <- seq(0.065, 0.105, by = 0.01)
+
+out_n <- nrow(out_sample)
+# Calculate the out-sample simple return for Stocks
+out_stock_s_return <- ((out_sample[-1, "Stocks"] - out_sample[1:(out_n-1), "Stocks"])/out_sample[1:(out_n-1), "Stocks"])
+# Calculate the simple return for Bonds
+out_bonds_s_return <- ((out_sample[-1, "Bonds"] - out_sample[1:(out_n-1), "Bonds"])/out_sample[1:(out_n-1), "Bonds"])
+# Calculate the simple return for MM
+out_mm_s_return <- ((out_sample[-1, "MM"] - out_sample[1:(out_n-1), "MM"])/out_sample[1:(out_n-1), "MM"])
+# Combind all the data
+out_sample_return_table <- cbind((out_sample[-1, "Year"]), out_stock_s_return, out_bonds_s_return, out_mm_s_return)
+
+# Calculate the out-sample matrix
+out_cov_matrix <- cov(out_sample_return_table[,2:ncol(out_sample_return_table)])
+
+# data table to combind all the data we need
+Table_7 <- data.table()
+Table_7 <- sapply(beta_list, function(b) {
+  # Calculate the weight by using in-sample data
+  weight <- MVO_Min_Var(as.numeric(in_geo_mean_table), in_cov_matrix, b)
+  # Calculate the in-sample portfolio variance
+  in_p_var <- weight %*% in_cov_matrix %*% weight
+  # Calculate the out-sample portfolio variance
+  out_p_var <- weight %*% out_cov_matrix %*% weight
+  Table_4_row <- c(in_p_var, out_p_var, weight)})
+Table_7 <- t(Table_7)
+colnames(Table_7)[1] <- "In-sample variance"
+colnames(Table_7)[2] <- "Out-sample variance"
+Table_7 <- cbind(beta_list, Table_7)
+colnames(Table_7)[1] <- "Rate of return β"
+
+# show the result in a table
+kable(Table_7, caption = "Table 7")
+```
+
